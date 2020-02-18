@@ -5,7 +5,7 @@ logmerge
 This is a library that merges multiple ordered log files based on timestamp. Logmerge provides a customizable function to get the timestamp from each line, and use heap sort for efficient sorting.It's used to merge nginx access log and error log for me.
 
 
-For complete documentation, check out the [Godoc]("https://godoc.org/github.com/starsz/logmerge").
+For complete documentation, check out the [Godoc][1].
 
 
 Usage
@@ -64,9 +64,4 @@ Output File
 2020/01/18 12:40:05 [error] 177004#0: *1004144640 recv() failed (104: Connection reset by peer)
 ```
 
-
-
-
-
-`
-}`
+[1]: https://godoc.org/github.com/starsz/logmerge
