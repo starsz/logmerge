@@ -6,15 +6,16 @@ Example:
 	filePath := []string{"1.log", "2.log", "3.log"}
 	outputPath := "output.log"
 	getTime := func(line []byte) (int64, logmerge.Action, error) {
-				tm, err := time.Parse("20060102150405", string(line[:14]))
-				if err != nil {
-					return 0, logmerge.SKIP, nil
-			    }
+		tm, err := time.Parse("20060102150405", string(line[:14]))
+		if err != nil {
+			return 0, logmerge.SKIP, nil
+		}
 
-				return tm.Unix(), logmerge.NOP, nil
-			}
+		return tm.Unix(), logmerge.NOP, nil
+	}
 
 	err := logMerge.Merge(filepath, outputPath, getTime)
+
 */
 package logmerge
 
@@ -28,20 +29,17 @@ import (
 // Define the timeHandler action
 type Action int
 
-/*
-	NOP: no extra option
-	SKIP: skip this line
-	STOP: stop file merging
-*/
 const (
+	// NOP: no extra option
 	NOP = iota
+	// SKIP: skip this line
 	SKIP
+	// STOP: stop file merging
 	STOP
 )
 
 /*
 	Define handlers for getting timestam from each line.
-  	You can do somethings like print log in this function.
 */
 type TimeHandler = func([]byte) (int64, Action, error)
 
