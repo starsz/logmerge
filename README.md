@@ -2,7 +2,7 @@
 logmerge
 ===========
 
-This is a library that merges multiple ordered log files based on timestamp. Logmerge provides a customizable function to get the timestamp from each line, and use heap sort for efficient sorting.It's used to merge nginx access log and error log for me.
+This is a library that merges multiple ordered log files based on timestamp. Logmerge provides a customizable function to get the timestamp from each line, and use min heap for efficient sorting.It's used to merge nginx access log and error log for me.
 
 
 For complete documentation, check out the [Godoc][1].
