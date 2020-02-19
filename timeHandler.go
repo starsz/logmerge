@@ -1,7 +1,6 @@
 package logmerge
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -16,7 +15,6 @@ func TimeStartHandler(layout string) TimeHandler {
 
 		tm, err := time.Parse(layout, string(line[:len(layout)]))
 		if err != nil {
-			fmt.Printf("err: %s\n", err.Error())
 			return 0, SKIP, nil
 		}
 
