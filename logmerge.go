@@ -21,12 +21,14 @@ package logmerge
 
 import (
 	"bufio"
+	"compress/gzip"
 	"container/heap"
+	"errors"
 	"os"
 	"path/filepath"
 )
 
-// Define the timeHandler action
+// Define the timeHandler action.
 type Action int
 
 const (
@@ -38,42 +40,58 @@ const (
 	STOP
 )
 
+var (
+	// NEED_TIMEHANDLER returned when the getTime function is nil.
+	NEED_TIMEHANDLER = errors.New("need time handler")
+)
+
 /*
-	Define handlers for getting timestam from each line.
+	Define handlers for getting timestamp from each line.
 */
 type TimeHandler = func([]byte) (int64, Action, error)
 
-type fileUnit struct {
+type fileReader struct {
 	filename  string
 	scanner   *bufio.Scanner
-	getTime   TimeHandler
 	timestamp int64
 	line      []byte
 	eof       bool
+	getTime   TimeHandler
 }
 
-type fileHeap []*fileUnit
+type Option struct {
+	SrcPath []string    // Merge src File Path
+	DstPath string      // The filePath merge to
+	SrcGzip bool        // Wheter src file is in gzip format
+	DstGzip bool        // Merge file in gzip format
+	GetTime TimeHandler // The function to getTime from each line
+}
 
-func (fh fileHeap) Len() int { return len(fh) }
+type fileHeap struct {
+	readers []*fileReader
+	writer  *bufio.Writer
+}
 
-func (fh fileHeap) Less(i, j int) bool { return fh[i].timestamp < fh[j].timestamp }
+func (fh fileHeap) Len() int { return len(fh.readers) }
+
+func (fh fileHeap) Less(i, j int) bool { return fh.readers[i].timestamp < fh.readers[j].timestamp }
 
 func (fh fileHeap) Swap(i, j int) {
-	fh[i], fh[j] = fh[j], fh[i]
+	fh.readers[i], fh.readers[j] = fh.readers[j], fh.readers[i]
 }
 
 func (fh *fileHeap) Push(h interface{}) {
-	*fh = append(*fh, h.(*fileUnit))
+	(*fh).readers = append((*fh).readers, h.(*fileReader))
 }
 
 func (fh *fileHeap) Pop() interface{} {
-	n := len(*fh)
-	fu := (*fh)[n-1]
-	*fh = (*fh)[:n-1]
-	return fu
+	n := len((*fh).readers)
+	fr := (*fh).readers[n-1]
+	(*fh).readers = (*fh).readers[:n-1]
+	return fr
 }
 
-func (fu *fileUnit) readLine() error {
+func (fu *fileReader) readLine() error {
 	var action Action
 	var tm int64
 	var line []byte
@@ -108,13 +126,51 @@ func (fu *fileUnit) readLine() error {
 	return nil
 }
 
+func (fh *fileHeap) merge() error {
+	writer := fh.writer
+	for (*fh).Len() > 0 {
+		fr := heap.Pop(fh).(*fileReader)
+		if _, err := writer.Write(append(fr.line, '\n')); err != nil {
+			return err
+		}
+
+		writer.Flush()
+
+		err := fr.readLine()
+		if err != nil {
+			return err
+		}
+
+		if !fr.eof {
+			heap.Push(fh, fr)
+		}
+	}
+
+	return nil
+}
+
 // Merge files to output file, and use getTime function to get timestmap.
-func Merge(filePath []string, outputFile string, getTime TimeHandler) error {
+func Merge(srcPath []string, dstPath string, getTime TimeHandler) error {
+	option := Option{
+		SrcPath: srcPath,
+		DstPath: dstPath,
+		GetTime: getTime,
+	}
+
+	return MergeByOption(option)
+}
+
+// Use option to control merge behavior.
+func MergeByOption(option Option) error {
+	if option.GetTime == nil {
+		return NEED_TIMEHANDLER
+	}
+
 	fHeap := new(fileHeap)
 
-	// init heap
 	heap.Init(fHeap)
-	for _, fp := range filePath {
+
+	for _, fp := range option.SrcPath {
 		fd, err := os.Open(fp)
 		if err != nil {
 			return err
@@ -122,51 +178,55 @@ func Merge(filePath []string, outputFile string, getTime TimeHandler) error {
 
 		defer fd.Close()
 
-		scanner := bufio.NewScanner(fd)
+		var scanner *bufio.Scanner
+		if option.SrcGzip {
+			gzReader, err := gzip.NewReader(fd)
+			if err != nil {
+				return err
+			}
 
-		fu := &fileUnit{
-			scanner:  scanner,
-			filename: filepath.Base(fp),
-			getTime:  getTime,
+			defer gzReader.Close()
+
+			scanner = bufio.NewScanner(gzReader)
+		} else {
+			scanner = bufio.NewScanner(fd)
 		}
 
-		err = fu.readLine()
+		fr := &fileReader{
+			scanner:  scanner,
+			filename: filepath.Base(fp),
+			getTime:  option.GetTime,
+		}
+
+		err = fr.readLine()
 		if err != nil {
 			return err
 		}
 
-		if !fu.eof {
-			heap.Push(fHeap, fu)
+		if !fr.eof {
+			heap.Push(fHeap, fr)
 		}
 	}
 
-	outputFd, err := os.Create(outputFile)
+	dstFd, err := os.Create(option.DstPath)
 	if err != nil {
 		return err
 	}
 
-	defer outputFd.Close()
+	defer dstFd.Close()
 
-	writer := bufio.NewWriter(outputFd)
+	var writer *bufio.Writer
+	if option.DstGzip {
+		gzWriter := gzip.NewWriter(dstFd)
 
-	for (*fHeap).Len() > 0 {
-		fu := heap.Pop(fHeap).(*fileUnit)
+		defer gzWriter.Close()
 
-		if _, err := writer.Write(append(fu.line, '\n')); err != nil {
-			return err
-		}
-
-		writer.Flush()
-
-		err := fu.readLine()
-		if err != nil {
-			return err
-		}
-
-		if !fu.eof {
-			heap.Push(fHeap, fu)
-		}
+		writer = bufio.NewWriter(gzWriter)
+	} else {
+		writer = bufio.NewWriter(dstFd)
 	}
 
-	return nil
+	fHeap.writer = writer
+
+	return fHeap.merge()
 }
