@@ -6,6 +6,13 @@ This is a library that merges multiple ordered log files based on timestamp. Log
 For complete documentation, check out the [Godoc][1].
 
 
+Feature
+===========
+
+- [x] Min Heap for efficient sorting
+- [x] Support gzip format
+
+
 Usage
 ===========
 
@@ -26,12 +33,6 @@ getTime := logmerge.TimeStartHandler("2006/01/02 15:04:05")
 
 err := logmerge.Merge(filePath, outputPath, getTime)
 ```
-
-Feature
-===========
-
-- [x] Min Heap for efficient sorting
-- [x] Support gzip format
 
 
 Example
