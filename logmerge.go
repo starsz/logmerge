@@ -28,7 +28,7 @@ import (
 	"path/filepath"
 )
 
-// Define the timeHandler action.
+// Action defined the read log behaviour.
 type Action int
 
 const (
@@ -46,7 +46,7 @@ var (
 )
 
 /*
-	Define handlers for getting timestamp from each line.
+	TimeHandler defined handlers for getting timestamp from each line.
 */
 type TimeHandler = func([]byte) (int64, Action, error)
 
@@ -59,10 +59,13 @@ type fileReader struct {
 	getTime   TimeHandler
 }
 
+/*
+	Option defined some option can set for merging.
+*/
 type Option struct {
 	SrcPath []string    // Merge src File Path
 	DstPath string      // The filePath merge to
-	SrcGzip bool        // Wheter src file is in gzip format
+	SrcGzip bool        // Whether src file is in gzip format
 	DstGzip bool        // Merge file in gzip format
 	GetTime TimeHandler // The function to getTime from each line
 }
@@ -149,7 +152,7 @@ func (fh *fileHeap) merge() error {
 	return nil
 }
 
-// Merge files to output file, and use getTime function to get timestmap.
+// Merge files to output file, and use getTime function to get timestamp.
 func Merge(srcPath []string, dstPath string, getTime TimeHandler) error {
 	option := Option{
 		SrcPath: srcPath,
@@ -160,7 +163,7 @@ func Merge(srcPath []string, dstPath string, getTime TimeHandler) error {
 	return MergeByOption(option)
 }
 
-// Use option to control merge behavior.
+// Use option to control merge behaviour.
 func MergeByOption(option Option) error {
 	if option.GetTime == nil {
 		return NEED_TIMEHANDLER
