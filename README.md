@@ -1,9 +1,7 @@
-
 logmerge
 ===========
 
 This is a library that merges multiple ordered log files based on timestamp. Logmerge provides a customizable function to get the timestamp from each line, and use min heap for efficient sorting.It's used to merge nginx access log and error log for me.
-
 
 For complete documentation, check out the [Godoc][1].
 
@@ -28,6 +26,12 @@ getTime := logmerge.TimeStartHandler("2006/01/02 15:04:05")
 
 err := logmerge.Merge(filePath, outputPath, getTime)
 ```
+
+Feature
+===========
+
+- [x] Min Heap for efficient sorting
+- [x] Support gzip format
 
 
 Example
