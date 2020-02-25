@@ -89,7 +89,7 @@ func TestNilMerge(t *testing.T) {
 
 	err := Merge(nil, "", getTime)
 
-	if strings.Index(err.Error(), "no such file or directory") == -1 {
+	if !strings.Contains(err.Error(), "no such file or directory") {
 		t.Errorf("Merge empty file error: %s", err.Error())
 	}
 
