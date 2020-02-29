@@ -3,6 +3,7 @@ package logmerge
 import (
 	"compress/gzip"
 	"errors"
+	"io"
 	"io/ioutil"
 	"os"
 	"strings"
@@ -27,6 +28,28 @@ const (
 2020/01/18 12:31:05 [error] 177004#0: *1004144640 recv() failed (104: Connection reset by peer)
 `
 )
+
+func readFile(path string, isGzip bool) ([]byte, error) {
+	fd, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+
+	defer os.Remove(path)
+	defer fd.Close()
+
+	if isGzip {
+		reader, err := gzip.NewReader(fd)
+		if err != nil {
+			return nil, err
+		}
+
+		defer reader.Close()
+		return ioutil.ReadAll(reader)
+	} else {
+		return ioutil.ReadAll(fd)
+	}
+}
 
 func doMerge(filePath []string, outputPath string, getTime TimeHandler) (string, error) {
 	err := Merge(filePath, outputPath, getTime)
@@ -238,4 +261,66 @@ func TestGzipMerge(t *testing.T) {
 
 	os.Remove(dstPath)
 
+}
+
+func TestDeleteSrcMerge(t *testing.T) {
+	filePath := []string{"./testdata/base1.log", "./testdata/base2.log"}
+
+	// prepare
+	var copyPath []string
+	for _, fp := range filePath {
+		cp := fp + "_copy"
+		copyFd, err := os.Create(cp)
+		if err != nil {
+			t.Errorf("create %s error: %s", cp, err.Error())
+		}
+
+		fd, err := os.Open(fp)
+		if err != nil {
+			t.Errorf("create %s error: %s", cp, err.Error())
+		}
+
+		_, err = io.Copy(copyFd, fd)
+		if err != nil {
+			t.Errorf("Create copyPath: %s", err.Error())
+			return
+		}
+
+		copyFd.Close()
+		fd.Close()
+		copyPath = append(copyPath, cp)
+	}
+	outputPath := "./testdata/output.log"
+
+	getTime := TimeStartHandler("2006/01/02 15:04:05")
+
+	option := Option{
+		SrcPath:   copyPath,
+		DstPath:   outputPath,
+		DeleteSrc: true,
+		GetTime:   getTime,
+	}
+
+	err := MergeByOption(option)
+	if err != nil {
+		t.Errorf("Merge file error: %s", err.Error())
+		return
+	}
+
+	res, err := readFile(outputPath, false)
+	if err != nil {
+		t.Errorf("readFile error: %s", err.Error())
+	}
+
+	if string(res) != EXPECTED1 {
+		t.Errorf("Different content, merge failed\n%s\nexpected:\n%s", string(res), EXPECTED1)
+	}
+
+	for _, copyFp := range copyPath {
+		fi, _ := os.Stat(copyFp)
+
+		if fi != nil {
+			t.Errorf("file exist")
+		}
+	}
 }

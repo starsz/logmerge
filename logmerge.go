@@ -63,11 +63,12 @@ type fileReader struct {
 	Option defined some option can set for merging.
 */
 type Option struct {
-	SrcPath []string    // Merge src File Path
-	DstPath string      // The filePath merge to
-	SrcGzip bool        // Whether src file is in gzip format
-	DstGzip bool        // Merge file in gzip format
-	GetTime TimeHandler // The function to getTime from each line
+	SrcPath   []string    // Merge src File Path
+	DstPath   string      // The filePath merge to
+	SrcGzip   bool        // Whether src file is in gzip format
+	DstGzip   bool        // Merge file in gzip format
+	DeleteSrc bool        // Delete src file
+	GetTime   TimeHandler // The function to getTime from each line
 }
 
 type fileHeap struct {
@@ -172,6 +173,14 @@ func MergeByOption(option Option) error {
 	fHeap := new(fileHeap)
 
 	heap.Init(fHeap)
+
+	if option.DeleteSrc {
+		defer func() {
+			for _, fp := range option.SrcPath {
+				os.Remove(fp)
+			}
+		}()
+	}
 
 	for _, fp := range option.SrcPath {
 		fd, err := os.Open(fp)
