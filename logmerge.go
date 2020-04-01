@@ -50,6 +50,8 @@ var (
 */
 type TimeHandler = func([]byte) (int64, Action, error)
 
+type FilterHandler = func([]byte) ([]byte, Action, error)
+
 type fileReader struct {
 	filename  string
 	scanner   *bufio.Scanner
@@ -57,18 +59,20 @@ type fileReader struct {
 	line      []byte
 	eof       bool
 	getTime   TimeHandler
+	filter    FilterHandler
 }
 
 /*
 	Option defined some option can set for merging.
 */
 type Option struct {
-	SrcPath   []string    // Merge src File Path
-	DstPath   string      // The filePath merge to
-	SrcGzip   bool        // Whether src file is in gzip format
-	DstGzip   bool        // Merge file in gzip format
-	DeleteSrc bool        // Delete src file
-	GetTime   TimeHandler // The function to getTime from each line
+	SrcPath   []string      // Merge src File Path
+	DstPath   string        // The filePath merge to
+	SrcGzip   bool          // Whether src file is in gzip format
+	DstGzip   bool          // Merge file in gzip format
+	DeleteSrc bool          // Delete src file
+	GetTime   TimeHandler   // The function to getTime from each line
+	Filter    FilterHandler // The function to process each line
 }
 
 type fileHeap struct {
@@ -119,6 +123,17 @@ func (fu *fileReader) readLine() error {
 			continue
 		} else if action == STOP {
 			return err
+		}
+
+		if fu.filter != nil {
+			newline, action, err := fu.filter(line)
+			if action == SKIP {
+				continue
+			} else if action == STOP {
+				return err
+			}
+
+			line = newline
 		}
 
 		break
@@ -208,6 +223,7 @@ func MergeByOption(option Option) error {
 			scanner:  scanner,
 			filename: filepath.Base(fp),
 			getTime:  option.GetTime,
+			filter:   option.Filter,
 		}
 
 		err = fr.readLine()

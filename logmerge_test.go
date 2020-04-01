@@ -27,6 +27,12 @@ const (
 2020/01/18 12:24:38 [error] 176995#0: *1004136348 [lua] heartbeat.lua:107: cb_heartbeat(): failed to connect: 127.0.0.1:403, timeout, context: ngx.timer
 2020/01/18 12:31:05 [error] 177004#0: *1004144640 recv() failed (104: Connection reset by peer)
 `
+
+	EXPECTED3 = `hello world
+hello world
+hello world
+hello world
+`
 )
 
 func readFile(path string, isGzip bool) ([]byte, error) {
@@ -315,12 +321,53 @@ func TestDeleteSrcMerge(t *testing.T) {
 	if string(res) != EXPECTED1 {
 		t.Errorf("Different content, merge failed\n%s\nexpected:\n%s", string(res), EXPECTED1)
 	}
-
 	for _, copyFp := range copyPath {
 		fi, _ := os.Stat(copyFp)
 
 		if fi != nil {
 			t.Errorf("file exist")
 		}
+	}
+}
+
+func TestFilter(t *testing.T) {
+	filePath := []string{"./testdata/base1.log", "./testdata/empty2.log"}
+	outputPath := "./testdata/output.log"
+
+	gettime := func(line []byte) (int64, Action, error) {
+		tm, err := time.Parse("2006/01/02 15:04:05", string(line[:19]))
+		if err != nil {
+			return 0, SKIP, nil
+		}
+
+		return tm.Unix(), NOP, nil
+	}
+
+	filter := func(line []byte) ([]byte, Action, error) {
+		return []byte("hello world"), NOP, nil
+	}
+
+	option := Option{
+		SrcPath: filePath,
+		DstPath: outputPath,
+		GetTime: gettime,
+		Filter:  filter,
+	}
+
+	err := MergeByOption(option)
+	if err != nil {
+		t.Errorf("Merge file error: %s", err.Error())
+	}
+
+	outputContent, err := ioutil.ReadFile(outputPath)
+	if err != nil {
+		t.Errorf("Readfile error: %s", err.Error())
+		return
+	}
+
+	os.Remove(outputPath)
+
+	if string(outputContent) != EXPECTED3 {
+		t.Errorf("Different content, merge failed")
 	}
 }

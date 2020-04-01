@@ -11,16 +11,21 @@ Feature
 
 - [x] Min Heap for efficient sorting
 - [x] Support gzip format
+- [x] Support processing each line
 
 
 Usage
 ===========
 
-First, define the getTime handler or use TimStartHandler in library.
+First, define the getTime handler and filter handler or use TimStartHandler in library.
 
 ```go
-func getTime([]byte) (int64, logmerge.Action, error) {
+func getTime(line []byte) (int64, logmerge.Action, error) {
         // do parse time in this
+}
+
+func filter(line []byte) ([]byte, logmerge.Action, error) {
+       // do process in this
 }
 ```
 
