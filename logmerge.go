@@ -24,8 +24,8 @@ import (
 	"compress/gzip"
 	"container/heap"
 	"errors"
+	"io"
 	"os"
-	"path/filepath"
 )
 
 // Action defined the read log behaviour.
@@ -66,8 +66,10 @@ type fileReader struct {
 	Option defined some option can set for merging.
 */
 type Option struct {
-	SrcPath   []string      // Merge src File Path
-	DstPath   string        // The filePath merge to
+	SrcPath   []string    // Merge src File Path
+	DstPath   string      // The filePath merge to
+	SrcReader []io.Reader // DstReader io.Reader
+	DstWriter io.Writer
 	SrcGzip   bool          // Whether src file is in gzip format
 	DstGzip   bool          // Merge file in gzip format
 	DeleteSrc bool          // Delete src file
@@ -179,54 +181,19 @@ func Merge(srcPath []string, dstPath string, getTime TimeHandler) error {
 	return MergeByOption(option)
 }
 
-// Use option to control merge behaviour.
-func MergeByOption(option Option) error {
-	if option.GetTime == nil {
-		return NEED_TIMEHANDLER
-	}
-
+func merge(readers []*bufio.Scanner, writer *bufio.Writer, getTime TimeHandler, filter FilterHandler) error {
 	fHeap := new(fileHeap)
 
 	heap.Init(fHeap)
 
-	if option.DeleteSrc {
-		defer func() {
-			for _, fp := range option.SrcPath {
-				os.Remove(fp)
-			}
-		}()
-	}
-
-	for _, fp := range option.SrcPath {
-		fd, err := os.Open(fp)
-		if err != nil {
-			return err
-		}
-
-		defer fd.Close()
-
-		var scanner *bufio.Scanner
-		if option.SrcGzip {
-			gzReader, err := gzip.NewReader(fd)
-			if err != nil {
-				return err
-			}
-
-			defer gzReader.Close()
-
-			scanner = bufio.NewScanner(gzReader)
-		} else {
-			scanner = bufio.NewScanner(fd)
-		}
-
+	for _, rd := range readers {
 		fr := &fileReader{
-			scanner:  scanner,
-			filename: filepath.Base(fp),
-			getTime:  option.GetTime,
-			filter:   option.Filter,
+			scanner: rd,
+			getTime: getTime,
+			filter:  filter,
 		}
 
-		err = fr.readLine()
+		err := fr.readLine()
 		if err != nil {
 			return err
 		}
@@ -236,14 +203,64 @@ func MergeByOption(option Option) error {
 		}
 	}
 
-	dstFd, err := os.Create(option.DstPath)
-	if err != nil {
-		return err
+	fHeap.writer = writer
+
+	return fHeap.merge()
+}
+
+// Use option to control merge behaviour.
+func MergeByOption(option Option) error {
+	if option.GetTime == nil {
+		return NEED_TIMEHANDLER
 	}
 
-	defer dstFd.Close()
+	var scanners []*bufio.Scanner
+	var fds = option.SrcReader
+
+	for _, fp := range option.SrcPath {
+		fd, err := os.Open(fp)
+		if err != nil {
+			return err
+		}
+
+		defer fd.Close()
+
+		fds = append(fds, fd)
+	}
+
+	for _, fd := range fds {
+		var s *bufio.Scanner
+		if option.SrcGzip {
+			gzReader, err := gzip.NewReader(fd)
+			if err != nil {
+				return err
+			}
+
+			defer gzReader.Close()
+
+			s = bufio.NewScanner(gzReader)
+		} else {
+			s = bufio.NewScanner(fd)
+		}
+
+		scanners = append(scanners, s)
+	}
+
+	var dstFd = option.DstWriter
+
+	if dstFd == nil {
+		fd, err := os.Create(option.DstPath)
+		if err != nil {
+			return err
+		}
+
+		defer fd.Close()
+
+		dstFd = fd
+	}
 
 	var writer *bufio.Writer
+
 	if option.DstGzip {
 		gzWriter := gzip.NewWriter(dstFd)
 
@@ -254,7 +271,18 @@ func MergeByOption(option Option) error {
 		writer = bufio.NewWriter(dstFd)
 	}
 
-	fHeap.writer = writer
+	err := merge(scanners, writer, option.GetTime, option.Filter)
+	if err != nil {
+		return err
+	}
 
-	return fHeap.merge()
+	if option.DeleteSrc {
+		defer func() {
+			for _, fp := range option.SrcPath {
+				os.Remove(fp)
+			}
+		}()
+	}
+
+	return nil
 }
