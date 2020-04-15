@@ -25,6 +25,7 @@ import (
 	"container/heap"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -355,6 +356,8 @@ func QuickMerge(option Option) error {
 		return NEED_ERRCHAN
 	}
 
+	defer close(option.ErrChan)
+
 	if option.CTX == nil {
 		option.CTX = context.Background()
 	}
@@ -381,7 +384,7 @@ func QuickMerge(option Option) error {
 	for _, fp := range option.SrcPath {
 		fd, err := os.Open(fp)
 		if err != nil {
-			option.ErrChan <- err
+			option.ErrChan <- fmt.Errorf("open %s error: %s", fp, err.Error())
 		}
 
 		defer fd.Close()
@@ -390,7 +393,7 @@ func QuickMerge(option Option) error {
 		if option.SrcGzip {
 			gzReader, err := gzip.NewReader(fd)
 			if err != nil {
-				option.ErrChan <- err
+				option.ErrChan <- fmt.Errorf("gzip.NewReader error: %s", err.Error())
 			}
 
 			defer gzReader.Close()
@@ -412,7 +415,7 @@ func QuickMerge(option Option) error {
 
 	fd, err := os.Create(option.DstPath)
 	if err != nil {
-		option.ErrChan <- err
+		option.ErrChan <- fmt.Errorf("create dst path %s error: %s", option.DstPath, err.Error())
 		return nil
 	}
 
@@ -440,7 +443,7 @@ loop:
 			}
 
 			if _, err := writer.Write(append(*line, '\n')); err != nil {
-				option.ErrChan <- err
+				option.ErrChan <- fmt.Errorf("write line error: %s", err.Error())
 				continue
 			}
 
