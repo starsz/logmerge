@@ -23,9 +23,11 @@ import (
 	"bufio"
 	"compress/gzip"
 	"container/heap"
+	"context"
 	"errors"
 	"io"
 	"os"
+	"sync"
 )
 
 // Action defined the read log behaviour.
@@ -43,6 +45,8 @@ const (
 var (
 	// NEED_TIMEHANDLER returned when the getTime function is nil.
 	NEED_TIMEHANDLER = errors.New("need time handler")
+	// NEED_ERRCHAN returned when using quick merge without err channel.
+	NEED_ERRCHAN = errors.New("need error channel")
 )
 
 /*
@@ -50,10 +54,13 @@ var (
 */
 type TimeHandler = func([]byte) (int64, Action, error)
 
+/*
+	FilterHandler defined handlers for modifying each line.
+*/
+
 type FilterHandler = func([]byte) ([]byte, Action, error)
 
 type fileReader struct {
-	filename  string
 	scanner   *bufio.Scanner
 	timestamp int64
 	line      []byte
@@ -66,15 +73,26 @@ type fileReader struct {
 	Option defined some option can set for merging.
 */
 type Option struct {
-	SrcPath   []string    // Merge src File Path
-	DstPath   string      // The filePath merge to
-	SrcReader []io.Reader // DstReader io.Reader
-	DstWriter io.Writer
-	SrcGzip   bool          // Whether src file is in gzip format
-	DstGzip   bool          // Merge file in gzip format
-	DeleteSrc bool          // Delete src file
-	GetTime   TimeHandler   // The function to getTime from each line
-	Filter    FilterHandler // The function to process each line
+	SrcPath   []string        // Merge src File Path
+	DstPath   string          // The filePath merge to
+	SrcReader []io.Reader     // Src files' io.Reader
+	DstWriter io.Writer       // Destinated file's io.Writer
+	SrcGzip   bool            // Whether src file is in gzip format
+	DstGzip   bool            // Merge file in gzip format
+	DeleteSrc bool            // Delete src file
+	GetTime   TimeHandler     // The function to getTime from each line
+	Filter    FilterHandler   // The function to process each line
+	Goroutine int             // Quick merge's worker number
+	ErrChan   chan error      // Quick merge's error return
+	CTX       context.Context // Quick merge's context
+}
+
+type quickMergeJob struct {
+	scanner *bufio.Scanner
+	writer  chan *[]byte
+	filter  FilterHandler
+	errChan chan error
+	ctx     context.Context
 }
 
 type fileHeap struct {
@@ -84,7 +102,9 @@ type fileHeap struct {
 
 func (fh fileHeap) Len() int { return len(fh.readers) }
 
-func (fh fileHeap) Less(i, j int) bool { return fh.readers[i].timestamp < fh.readers[j].timestamp }
+func (fh fileHeap) Less(i, j int) bool {
+	return fh.readers[i].timestamp < fh.readers[j].timestamp
+}
 
 func (fh fileHeap) Swap(i, j int) {
 	fh.readers[i], fh.readers[j] = fh.readers[j], fh.readers[i]
@@ -170,17 +190,6 @@ func (fh *fileHeap) merge() error {
 	return nil
 }
 
-// Merge files to output file, and use getTime function to get timestamp.
-func Merge(srcPath []string, dstPath string, getTime TimeHandler) error {
-	option := Option{
-		SrcPath: srcPath,
-		DstPath: dstPath,
-		GetTime: getTime,
-	}
-
-	return MergeByOption(option)
-}
-
 func merge(readers []*bufio.Scanner, writer *bufio.Writer, getTime TimeHandler, filter FilterHandler) error {
 	fHeap := new(fileHeap)
 
@@ -206,6 +215,55 @@ func merge(readers []*bufio.Scanner, writer *bufio.Writer, getTime TimeHandler, 
 	fHeap.writer = writer
 
 	return fHeap.merge()
+}
+
+func quickMerge(job *quickMergeJob) {
+	scanner := job.scanner
+	writer := job.writer
+	filter := job.filter
+	errChan := job.errChan
+
+	for {
+		select {
+		case <-job.ctx.Done():
+			return
+		default:
+			if ok := scanner.Scan(); !ok {
+				if err := scanner.Err(); err != nil {
+					errChan <- err
+				}
+
+				// EOF
+				return
+			}
+
+			line := scanner.Bytes()
+			if filter != nil {
+				newline, action, err := job.filter(line)
+				if action == SKIP {
+					continue
+				} else if action == STOP {
+					errChan <- err
+					return
+				}
+
+				line = newline
+			}
+
+			writer <- &line
+		}
+	}
+}
+
+// Merge files to output file, and use getTime function to get timestamp.
+func Merge(srcPath []string, dstPath string, getTime TimeHandler) error {
+	option := Option{
+		SrcPath: srcPath,
+		DstPath: dstPath,
+		GetTime: getTime,
+	}
+
+	return MergeByOption(option)
 }
 
 // Use option to control merge behaviour.
@@ -284,5 +342,112 @@ func MergeByOption(option Option) error {
 		}()
 	}
 
+	return nil
+}
+
+// Quick merge used for without sorting
+func QuickMerge(option Option) error {
+	var wg sync.WaitGroup
+	jobChan := make(chan *quickMergeJob, len(option.SrcPath))
+	writerChan := make(chan *[]byte, len(option.SrcPath)*100)
+
+	if option.ErrChan == nil {
+		return NEED_ERRCHAN
+	}
+
+	if option.CTX == nil {
+		option.CTX = context.Background()
+	}
+
+	finishedCount := 0
+	var mutex sync.Mutex
+	for i := 0; i < option.Goroutine; i++ {
+		wg.Add(1)
+		go func() {
+			for job := range jobChan {
+				quickMerge(job)
+			}
+			wg.Done()
+
+			mutex.Lock()
+			finishedCount++
+			if finishedCount == option.Goroutine {
+				close(writerChan)
+			}
+			mutex.Unlock()
+		}()
+	}
+
+	for _, fp := range option.SrcPath {
+		fd, err := os.Open(fp)
+		if err != nil {
+			option.ErrChan <- err
+		}
+
+		defer fd.Close()
+
+		var scanner *bufio.Scanner
+		if option.SrcGzip {
+			gzReader, err := gzip.NewReader(fd)
+			if err != nil {
+				option.ErrChan <- err
+			}
+
+			defer gzReader.Close()
+
+			scanner = bufio.NewScanner(gzReader)
+		} else {
+			scanner = bufio.NewScanner(fd)
+		}
+
+		jobChan <- &quickMergeJob{
+			scanner: scanner,
+			writer:  writerChan,
+			filter:  option.Filter,
+			errChan: option.ErrChan,
+			ctx:     option.CTX,
+		}
+	}
+	close(jobChan)
+
+	fd, err := os.Create(option.DstPath)
+	if err != nil {
+		option.ErrChan <- err
+		return nil
+	}
+
+	defer fd.Close()
+
+	var writer *bufio.Writer
+	if option.DstGzip {
+		gzWriter := gzip.NewWriter(fd)
+		defer gzWriter.Close()
+
+		writer = bufio.NewWriter(gzWriter)
+	} else {
+		writer = bufio.NewWriter(fd)
+	}
+
+loop:
+	for {
+		select {
+		case <-option.CTX.Done():
+			return nil
+		case line, ok := <-writerChan:
+			// chan closed
+			if !ok {
+				break loop
+			}
+
+			if _, err := writer.Write(append(*line, '\n')); err != nil {
+				option.ErrChan <- err
+				continue
+			}
+
+			writer.Flush()
+		}
+	}
+
+	wg.Wait()
 	return nil
 }

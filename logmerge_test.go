@@ -2,7 +2,9 @@ package logmerge
 
 import (
 	"compress/gzip"
+	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -32,6 +34,11 @@ const (
 hello world
 hello world
 hello world
+`
+
+	EXPECTED4 = `2020/01/18 12:20:30 [error] 177003#0: *1004128358 recv() failed (104: Connection reset by peer)
+2020/01/18 12:20:30 [error] 177003#0: *1004128358 recv() failed (104: Connection reset by peer)
+2020/01/18 12:20:30 [error] 177003#0: *1004128358 recv() failed (104: Connection reset by peer)
 `
 )
 
@@ -369,5 +376,38 @@ func TestFilter(t *testing.T) {
 
 	if string(outputContent) != EXPECTED3 {
 		t.Errorf("Different content, merge failed")
+	}
+}
+
+func TestQuickMerge(t *testing.T) {
+	filePath := []string{"./testdata/quick1.log", "./testdata/quick2.log", "./testdata/quick3.log"}
+	dstPath := "./testdata/output.log"
+	errChan := make(chan error, len(filePath))
+
+	option := Option{
+		SrcPath:   filePath,
+		DstPath:   dstPath,
+		ErrChan:   errChan,
+		Goroutine: 3,
+		CTX:       context.Background(),
+	}
+
+	go func() {
+		for err := range errChan {
+			fmt.Printf("err: %s", err.Error())
+		}
+	}()
+	err := QuickMerge(option)
+	if err != nil {
+		t.Errorf("quick merge error: %s", err.Error())
+	}
+
+	res, err := ioutil.ReadFile(dstPath)
+	if err != nil {
+		t.Errorf("read file %s error: %s", dstPath, err.Error())
+	}
+
+	if string(res) != EXPECTED4 {
+		t.Errorf("Different content, quick merge failed")
 	}
 }

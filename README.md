@@ -12,6 +12,7 @@ Feature
 - [x] Min Heap for efficient sorting
 - [x] Support gzip format
 - [x] Support processing each line
+- [x] Quick merge
 
 
 Usage
