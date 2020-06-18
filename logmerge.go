@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 )
 
@@ -59,9 +60,10 @@ type TimeHandler = func([]byte) (int64, Action, error)
 	FilterHandler defined handlers for modifying each line.
 */
 
-type FilterHandler = func([]byte) ([]byte, Action, error)
+type FilterHandler = func(string, []byte) ([]byte, Action, error)
 
 type fileReader struct {
+	filename  string
 	scanner   *bufio.Scanner
 	timestamp int64
 	line      []byte
@@ -89,11 +91,12 @@ type Option struct {
 }
 
 type quickMergeJob struct {
-	scanner *bufio.Scanner
-	writer  chan *[]byte
-	filter  FilterHandler
-	errChan chan error
-	ctx     context.Context
+	filename string
+	scanner  *bufio.Scanner
+	writer   chan []byte
+	filter   FilterHandler
+	errChan  chan error
+	ctx      context.Context
 }
 
 type fileHeap struct {
@@ -149,7 +152,7 @@ func (fu *fileReader) readLine() error {
 		}
 
 		if fu.filter != nil {
-			newline, action, err := fu.filter(line)
+			newline, action, err := fu.filter(fu.filename, line)
 			if action == SKIP {
 				continue
 			} else if action == STOP {
@@ -172,7 +175,7 @@ func (fh *fileHeap) merge() error {
 	writer := fh.writer
 	for (*fh).Len() > 0 {
 		fr := heap.Pop(fh).(*fileReader)
-		if _, err := writer.Write(append(fr.line, '\n')); err != nil {
+		if _, err := writer.WriteString(string(fr.line) + "\n"); err != nil {
 			return err
 		}
 
@@ -220,8 +223,9 @@ func merge(readers []*bufio.Scanner, writer *bufio.Writer, getTime TimeHandler, 
 
 func quickMerge(job *quickMergeJob) {
 	scanner := job.scanner
-	writer := job.writer
 	filter := job.filter
+	writer := job.writer
+	filename := job.filename
 	errChan := job.errChan
 
 	for {
@@ -231,7 +235,7 @@ func quickMerge(job *quickMergeJob) {
 		default:
 			if ok := scanner.Scan(); !ok {
 				if err := scanner.Err(); err != nil {
-					errChan <- err
+					errChan <- fmt.Errorf("scan %s error %s", filename, err.Error())
 				}
 
 				// EOF
@@ -240,18 +244,23 @@ func quickMerge(job *quickMergeJob) {
 
 			line := scanner.Bytes()
 			if filter != nil {
-				newline, action, err := job.filter(line)
+				newline, action, err := filter(filename, line)
 				if action == SKIP {
 					continue
 				} else if action == STOP {
-					errChan <- err
+					errChan <- fmt.Errorf("filter: %s error %s", filename, err.Error())
+					close(writer)
 					return
 				}
 
 				line = newline
+
 			}
 
-			writer <- &line
+			resline := make([]byte, len(line))
+			copy(resline, line)
+
+			writer <- resline
 		}
 	}
 }
@@ -275,6 +284,14 @@ func MergeByOption(option Option) error {
 
 	var scanners []*bufio.Scanner
 	var fds = option.SrcReader
+
+	if option.DeleteSrc {
+		defer func() {
+			for _, fp := range option.SrcPath {
+				os.Remove(fp)
+			}
+		}()
+	}
 
 	for _, fp := range option.SrcPath {
 		fd, err := os.Open(fp)
@@ -335,14 +352,6 @@ func MergeByOption(option Option) error {
 		return err
 	}
 
-	if option.DeleteSrc {
-		defer func() {
-			for _, fp := range option.SrcPath {
-				os.Remove(fp)
-			}
-		}()
-	}
-
 	return nil
 }
 
@@ -350,7 +359,7 @@ func MergeByOption(option Option) error {
 func QuickMerge(option Option) error {
 	var wg sync.WaitGroup
 	jobChan := make(chan *quickMergeJob, len(option.SrcPath))
-	writerChan := make(chan *[]byte, len(option.SrcPath)*100)
+	writerChan := make(chan []byte, len(option.SrcPath)*100)
 
 	if option.ErrChan == nil {
 		return NEED_ERRCHAN
@@ -359,7 +368,7 @@ func QuickMerge(option Option) error {
 	defer close(option.ErrChan)
 
 	if option.CTX == nil {
-		option.CTX = context.Background()
+		option.CTX = context.TODO()
 	}
 
 	finishedCount := 0
@@ -385,6 +394,7 @@ func QuickMerge(option Option) error {
 		fd, err := os.Open(fp)
 		if err != nil {
 			option.ErrChan <- fmt.Errorf("open %s error: %s", fp, err.Error())
+			continue
 		}
 
 		defer fd.Close()
@@ -394,6 +404,7 @@ func QuickMerge(option Option) error {
 			gzReader, err := gzip.NewReader(fd)
 			if err != nil {
 				option.ErrChan <- fmt.Errorf("gzip.NewReader error: %s", err.Error())
+				continue
 			}
 
 			defer gzReader.Close()
@@ -403,13 +414,16 @@ func QuickMerge(option Option) error {
 			scanner = bufio.NewScanner(fd)
 		}
 
-		jobChan <- &quickMergeJob{
-			scanner: scanner,
-			writer:  writerChan,
-			filter:  option.Filter,
-			errChan: option.ErrChan,
-			ctx:     option.CTX,
+		var job = quickMergeJob{
+			scanner:  scanner,
+			filename: filepath.Base(fp),
+			writer:   writerChan,
+			filter:   option.Filter,
+			errChan:  option.ErrChan,
+			ctx:      option.CTX,
 		}
+
+		jobChan <- &job
 	}
 	close(jobChan)
 
@@ -442,7 +456,7 @@ loop:
 				break loop
 			}
 
-			if _, err := writer.Write(append(*line, '\n')); err != nil {
+			if _, err := writer.WriteString(string(line) + "\n"); err != nil {
 				option.ErrChan <- fmt.Errorf("write line error: %s", err.Error())
 				continue
 			}

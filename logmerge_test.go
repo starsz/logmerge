@@ -350,7 +350,7 @@ func TestFilter(t *testing.T) {
 		return tm.Unix(), NOP, nil
 	}
 
-	filter := func(line []byte) ([]byte, Action, error) {
+	filter := func(filename string, line []byte) ([]byte, Action, error) {
 		return []byte("hello world"), NOP, nil
 	}
 
