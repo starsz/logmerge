@@ -24,12 +24,13 @@ import (
 	"compress/gzip"
 	"container/heap"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/pkg/errors"
 )
 
 // Action defined the read log behaviour.
@@ -135,7 +136,7 @@ func (fu *fileReader) readLine() error {
 	for {
 		if ok := scanner.Scan(); !ok {
 			if err = scanner.Err(); err != nil {
-				return err
+				return errors.Wrap(err, "scanner err")
 			}
 
 			// EOF
@@ -176,7 +177,7 @@ func (fh *fileHeap) merge() error {
 	for (*fh).Len() > 0 {
 		fr := heap.Pop(fh).(*fileReader)
 		if _, err := writer.WriteString(string(fr.line) + "\n"); err != nil {
-			return err
+			return errors.Wrap(err, "writer writeString")
 		}
 
 		writer.Flush()
@@ -283,16 +284,6 @@ func MergeByOption(option Option) error {
 	}
 
 	var scanners []*bufio.Scanner
-	var fds = option.SrcReader
-
-	if option.DeleteSrc {
-		defer func() {
-			for _, fp := range option.SrcPath {
-				os.Remove(fp)
-			}
-		}()
-	}
-
 	for _, fp := range option.SrcPath {
 		fd, err := os.Open(fp)
 		if err != nil {
@@ -301,15 +292,11 @@ func MergeByOption(option Option) error {
 
 		defer fd.Close()
 
-		fds = append(fds, fd)
-	}
-
-	for _, fd := range fds {
 		var s *bufio.Scanner
 		if option.SrcGzip {
 			gzReader, err := gzip.NewReader(fd)
 			if err != nil {
-				return err
+				return errors.Wrap(err, fmt.Sprintf("gzip newreader: %s ", fp))
 			}
 
 			defer gzReader.Close()
@@ -323,7 +310,6 @@ func MergeByOption(option Option) error {
 	}
 
 	var dstFd = option.DstWriter
-
 	if dstFd == nil {
 		fd, err := os.Create(option.DstPath)
 		if err != nil {
@@ -352,6 +338,11 @@ func MergeByOption(option Option) error {
 		return err
 	}
 
+	if option.DeleteSrc {
+		for _, fp := range option.SrcPath {
+			os.Remove(fp)
+		}
+	}
 	return nil
 }
 
